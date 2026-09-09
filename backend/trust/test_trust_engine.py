@@ -35,3 +35,23 @@ def test_score_never_exceeds_bounds():
     engine.register_entity("PC-05", initial_score=5)
     engine.update_trust("PC-05", reason="critical incident", delta=-50)
     assert engine.get_trust("PC-05").score == 0.0
+
+
+def test_repeated_suspicious_events_trigger_decay():
+    engine = TrustEngine()
+    engine.register_entity("PC-06")
+    engine.update_trust("PC-06", reason="anomaly 1", delta=-5)
+    engine.update_trust("PC-06", reason="anomaly 2", delta=-5)
+    entity = engine.get_trust("PC-06")
+    assert entity.score == 55.0
+    assert entity.consecutive_suspicious_events == 0
+
+
+def test_sustained_normal_behavior_triggers_recovery():
+    engine = TrustEngine()
+    engine.register_entity("PC-07", initial_score=50)
+    engine.update_trust("PC-07", reason="normal auth 1", delta=1)
+    engine.update_trust("PC-07", reason="normal auth 2", delta=1)
+    engine.update_trust("PC-07", reason="normal auth 3", delta=1)
+    entity = engine.get_trust("PC-07")
+    assert entity.score == 55.0

@@ -2,7 +2,6 @@ from typing import Dict, Optional
 
 from .models import TrustScore
 
-# Trust level thresholds — adjust as the project's policy evolves
 TRUST_LEVELS = [
     (85, "TRUSTED"),
     (60, "NORMAL"),
@@ -10,14 +9,13 @@ TRUST_LEVELS = [
     (0, "UNTRUSTED"),
 ]
 
+DECAY_STEP = 5.0
+DECAY_TRIGGER_COUNT = 2
+RECOVERY_STEP = 2.0
+RECOVERY_TRIGGER_COUNT = 3
+
 
 class TrustEngine:
-    """
-    Maintains dynamic trust scores for all entities on the network.
-    Trust is never a static label — it moves up or down based on
-    observed behavior (auth events, anomalies, incidents, etc.).
-    """
-
     def __init__(self) -> None:
         self._entities: Dict[str, TrustScore] = {}
 
@@ -30,14 +28,26 @@ class TrustEngine:
         return self._entities.get(entity_id)
 
     def update_trust(self, entity_id: str, reason: str, delta: float) -> TrustScore:
-        """
-        Apply a trust-affecting event.
-        Positive delta = trust-building behavior (e.g. successful auth).
-        Negative delta = suspicious behavior (e.g. anomaly detected).
-        """
         entity = self.register_entity(entity_id)
         entity.record_event(reason=reason, delta=delta)
+        self._apply_decay_or_recovery(entity)
         return entity
+
+    def _apply_decay_or_recovery(self, entity: TrustScore) -> None:
+        if entity.consecutive_suspicious_events >= DECAY_TRIGGER_COUNT:
+            entity.record_event(
+                reason=f"trust decay after {entity.consecutive_suspicious_events} consecutive suspicious events",
+                delta=-DECAY_STEP,
+                track_streak=False,
+            )
+            entity.consecutive_suspicious_events = 0
+        elif entity.consecutive_normal_events >= RECOVERY_TRIGGER_COUNT:
+            entity.record_event(
+                reason=f"trust recovery after {entity.consecutive_normal_events} consecutive normal events",
+                delta=RECOVERY_STEP,
+                track_streak=False,
+            )
+            entity.consecutive_normal_events = 0
 
     def get_trust_level(self, entity_id: str) -> str:
         entity = self._entities.get(entity_id)
