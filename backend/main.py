@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, timezone
 import random
 
-app = FastAPI(title="Sentinel Star X - Command Center API")
+app = FastAPI(title="Sentinel Star X")
 
 app.add_middleware(
     CORSMiddleware,
@@ -11,8 +11,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# --- Mock data endpoints (real impl connects to your modules) ---
 
 @app.get("/api/network/status")
 def network_status():
@@ -25,48 +23,67 @@ def network_status():
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
+@app.get("/api/trust/levels")
+def trust_levels():
+    data = [
+        {"node_id": "node-1",  "trust_level": "NORMAL",     "gate": "PROCEED",  "color": "#22c55e"},
+        {"node_id": "node-2",  "trust_level": "QUARANTINE",  "gate": "BLOCKED",  "color": "#7c3aed"},
+        {"node_id": "node-3",  "trust_level": "SUSPICIOUS",  "gate": "HOLD",     "color": "#f59e0b"},
+        {"node_id": "node-4",  "trust_level": "RESTRICT",    "gate": "MANUAL",   "color": "#ef4444"},
+        {"node_id": "node-5",  "trust_level": "NORMAL",      "gate": "PROCEED",  "color": "#22c55e"},
+        {"node_id": "node-6",  "trust_level": "MONITOR",     "gate": "PROCEED",  "color": "#3b82f6"},
+    ]
+    return data
+
+@app.get("/api/recovery/active")
+def active_recovery():
+    return {
+        "node_id": "node-11",
+        "strategy": "reroute",
+        "elapsed_seconds": 3.2,
+        "confidence": 87,
+        "cost_score": 24,
+        "stages": [
+            {"name": "isolate", "status": "done"},
+            {"name": "reroute", "status": "active"},
+            {"name": "verify",  "status": "pending"},
+        ]
+    }
+
 @app.get("/api/recovery/recent")
 def recent_recoveries():
-    strategies = ["reroute", "restart", "failover", "isolate"]
     return [
-        {
-            "node_id": f"node-{i}",
-            "strategy": random.choice(strategies),
-            "success": random.choice([True, True, True, False]),
-            "duration_seconds": round(random.uniform(1.5, 15.0), 2),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-        for i in range(1, 8)
+        {"node_id": "node-3",  "strategy": "restart",  "success": True,  "trust": "NORMAL",      "time": "2m ago"},
+        {"node_id": "node-7",  "strategy": "failover", "success": True,  "trust": "MONITOR",     "time": "8m ago"},
+        {"node_id": "node-9",  "strategy": "reroute",  "success": False, "trust": "SUSPICIOUS",  "time": "12m ago"},
+        {"node_id": "node-2",  "strategy": "isolate",  "success": False, "trust": "QUARANTINE",  "time": "15m ago"},
     ]
+
+@app.get("/api/decision/latest")
+def latest_decision():
+    return {
+        "node_id": "node-11",
+        "scores": [
+            {"strategy": "reroute",  "score": 87, "color": "#6366f1"},
+            {"strategy": "failover", "score": 61, "color": "#3b82f6"},
+            {"strategy": "restart",  "score": 34, "color": "#f59e0b"},
+            {"strategy": "isolate",  "score": 18, "color": "#ef4444"},
+        ]
+    }
 
 @app.get("/api/services/resilience")
 def service_resilience():
-    services = ["web", "db", "auth", "cache", "api-gateway"]
     return [
-        {
-            "service": s,
-            "is_up": random.choice([True, True, True, False]),
-            "uptime_percent": round(random.uniform(85.0, 100.0), 1),
-        }
-        for s in services
-    ]
-
-@app.get("/api/security/threat-levels")
-def threat_levels():
-    levels = ["NORMAL", "MONITOR", "SUSPICIOUS", "RESTRICT"]
-    return [
-        {"node_id": f"node-{i}", "threat_level": random.choice(levels)}
-        for i in range(1, 8)
+        {"service": "web",         "uptime_percent": 96, "is_up": True},
+        {"service": "db",          "uptime_percent": 98, "is_up": True},
+        {"service": "auth",        "uptime_percent": 91, "is_up": True},
+        {"service": "cache",       "uptime_percent": 88, "is_up": True},
+        {"service": "api-gateway", "uptime_percent": 41, "is_up": False},
     ]
 
 @app.get("/api/queue/pending")
 def pending_approvals():
     return [
-        {
-            "request_id": f"req-{i}",
-            "node_id": f"node-{i}",
-            "strategy": "restart",
-            "reason": "High load detected",
-        }
-        for i in range(1, 3)
+        {"request_id": "req-1", "node_id": "node-1", "strategy": "restart"},
+        {"request_id": "req-2", "node_id": "node-2", "strategy": "restart"},
     ]
