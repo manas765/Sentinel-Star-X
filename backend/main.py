@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 import random
 
 app = FastAPI(title="Sentinel Star X")
+from backend.network.router import router as network_router
+app.include_router(network_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -11,18 +13,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-@app.get("/api/network/status")
-def network_status():
-    return {
-        "total_nodes": 12,
-        "healthy_nodes": 9,
-        "failed_nodes": 2,
-        "recovering_nodes": 1,
-        "overall_health": 75.0,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-
 @app.get("/api/trust/levels")
 def trust_levels():
     data = [
