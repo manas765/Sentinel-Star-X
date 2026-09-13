@@ -27,6 +27,7 @@ already installed) to confirm before you PR it.
 from fastapi import APIRouter
 
 from backend.ai.anomaly_detection import detect_anomalies
+from backend.ai.failure_classification import classify_failures
 from backend.ai.failure_prediction import TrendFailurePredictor, predict_failures
 from backend.ai.telemetry_sim import SyntheticTelemetryGenerator
 
@@ -55,3 +56,13 @@ def get_failure_predictions():
     snapshot = _dev_generator.generate_snapshot()
     _predictor.update(snapshot)
     return {"results": predict_failures(_predictor)}
+
+
+@router.get("/failure-classification")
+def get_failure_classification():
+    """Feature 3: Failure Classification. What kind of failure each
+    anomalous node is showing -- see failure_classification.py's interface
+    flag re: coordinating with Manas's security/failure differentiation."""
+    snapshot = _dev_generator.generate_snapshot()
+    anomalies = detect_anomalies(snapshot)
+    return {"results": classify_failures(anomalies)}
