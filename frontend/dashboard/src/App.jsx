@@ -116,7 +116,6 @@ export default function App() {
         @keyframes slideup{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:translateY(0)}}
       `}</style>
 
-      {/* Background grid */}
       <div style={{ position: "fixed", inset: 0, backgroundImage: "linear-gradient(#ffffff03 1px,transparent 1px),linear-gradient(90deg,#ffffff03 1px,transparent 1px)", backgroundSize: "40px 40px", pointerEvents: "none", zIndex: 0 }} />
       <div style={{ position: "fixed", left: 0, right: 0, height: 1, background: "linear-gradient(90deg,transparent,#6366f120,transparent)", animation: "scan 8s linear infinite", pointerEvents: "none", zIndex: 1 }} />
 
@@ -156,12 +155,12 @@ export default function App() {
 
           {/* KPI Row */}
           {status && (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 12, marginBottom: 0, animation: "fadein .5s .1s ease both", opacity: 0, animationFillMode: "both" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 12, marginBottom: 0, animation: "fadein .5s .1s ease both", animationFillMode: "both" }}>
               <KpiCard label="Network Health"    value={`${status.overall_health}%`} color="#22c55e" sub="↑ 3% from last hour" />
-              <KpiCard label="Nodes Online"      value={`${status.healthy_nodes} / ${status.total_nodes}`} color="#f1f5f9" sub={`${status.failed_nodes + status.recovering_nodes} degraded`} />
-              <KpiCard label="Active Recoveries" value={status.recovering_nodes}     color="#f59e0b" sub="reroute in progress" />
-              <KpiCard label="Trust Gate Blocks" value="2"                            color="#ef4444" sub="quarantine hold active" />
-              <KpiCard label="Decisions Today"   value="14"                           color="#6366f1" sub="12 auto · 2 manual" />
+              <KpiCard label="Nodes Online"      value={`${status.healthy_nodes} / ${status.total_nodes}`} color="#f1f5f9" sub={`${(status.failed_nodes || 0) + (status.recovering_nodes || 0)} degraded`} />
+              <KpiCard label="Active Recoveries" value={status.recovering_nodes || 0} color="#f59e0b" sub="reroute in progress" />
+              <KpiCard label="Trust Gate Blocks" value="2" color="#ef4444" sub="quarantine hold active" />
+              <KpiCard label="Decisions Today"   value="14" color="#6366f1" sub="12 auto · 2 manual" />
             </div>
           )}
 
@@ -170,9 +169,7 @@ export default function App() {
           {/* Trust Gate + Self Healing */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16, animation: "fadein .5s .2s ease both", animationFillMode: "both" }}>
 
-            {/* Trust Gate */}
             <Panel title="Trust Gate" badge="Manas · Security" dot dotColor="#ef4444">
-              {/* Flow */}
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 24, overflowX: "auto", paddingBottom: 4 }}>
                 {[["Node", "#6366f1"], ["Trust Check", "#f59e0b"], ["Gate Decision", "#ef4444"], ["Recovery Engine", "#22c55e"]].map(([l, c], i) => (
                   <div key={l} style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
@@ -183,7 +180,6 @@ export default function App() {
                   </div>
                 ))}
               </div>
-              {/* Nodes */}
               {trust.map(({ node_id, trust_level, gate }) => {
                 const tc = TRUST_COLOR[trust_level] || "#6b7280";
                 const gc = GATE_COLOR[gate] || "#6b7280";
@@ -202,16 +198,15 @@ export default function App() {
               })}
             </Panel>
 
-            {/* Self Healing */}
             <Panel title="Autonomous Self-Healing" badge="Aakash · Recovery" dot dotColor="#22c55e">
               {active && (
                 <div style={{ background: "#0a0a0c", border: "1px solid #1a2e1a", borderRadius: 8, padding: 18, marginBottom: 20, borderLeft: "3px solid #22c55e" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       <Spinner />
-                      <span style={{ fontSize: 14, color: "#22c55e", fontWeight: 800, letterSpacing: "-0.01em" }}>{active.node_id} · {active.strategy}ing</span>
+                      <span style={{ fontSize: 14, color: "#22c55e", fontWeight: 800 }}>{active.node_id} · {active.strategy}ing</span>
                     </div>
-                    <span style={{ fontSize: 12, color: "#374151", fontWeight: 500 }}>{active.elapsed_seconds}s elapsed</span>
+                    <span style={{ fontSize: 12, color: "#374151" }}>{active.elapsed_seconds}s elapsed</span>
                   </div>
                   <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
                     {active.stages.map(({ name, status }) => (
@@ -221,7 +216,7 @@ export default function App() {
                       </div>
                     ))}
                   </div>
-                  <div style={{ fontSize: 11, color: "#374151", fontWeight: 500 }}>Decision Engine chose <span style={{ color: "#6366f1" }}>reroute</span> · confidence <span style={{ color: "#22c55e" }}>{active.confidence}%</span> · cost score {active.cost_score}/100</div>
+                  <div style={{ fontSize: 11, color: "#374151" }}>Decision Engine chose <span style={{ color: "#6366f1" }}>reroute</span> · confidence <span style={{ color: "#22c55e" }}>{active.confidence}%</span> · cost score {active.cost_score}/100</div>
                 </div>
               )}
               <div style={{ fontSize: 11, color: "#374151", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 700, marginBottom: 14 }}>Recent heals</div>
@@ -230,7 +225,7 @@ export default function App() {
                   <span style={{ fontSize: 13, color: "#4b5563", fontFamily: "monospace", fontWeight: 600 }}>{node_id}</span>
                   <Tag label={strategy} color={STRATEGY_COLOR[strategy] || "#6b7280"} />
                   <span style={{ fontSize: 16, color: success ? "#22c55e" : "#ef4444", fontWeight: 800 }}>{success ? "✓" : "✗"}</span>
-                  <span style={{ fontSize: 11, color: "#374151", fontWeight: 500 }}>trust: <span style={{ color: TRUST_COLOR[trust] }}>{trust}</span></span>
+                  <span style={{ fontSize: 11, color: "#374151" }}>trust: <span style={{ color: TRUST_COLOR[trust] }}>{trust}</span></span>
                   <span style={{ fontSize: 11, color: "#1f2937", textAlign: "right" }}>{time}</span>
                 </div>
               ))}
@@ -239,10 +234,8 @@ export default function App() {
 
           <SectionLabel text="NETWORK · SERVICES · DECISIONS" />
 
-          {/* Bottom row */}
           <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 0.85fr", gap: 16, marginBottom: 0, animation: "fadein .5s .3s ease both", animationFillMode: "both" }}>
 
-            {/* Nodes */}
             <Panel title="Node Topology" badge="12 nodes">
               <div style={{ display: "flex", flexWrap: "wrap", gap: 14, marginBottom: 20 }}>
                 {Array.from({ length: 12 }, (_, i) => {
@@ -265,7 +258,6 @@ export default function App() {
               </div>
             </Panel>
 
-            {/* Services */}
             <Panel title="Service Resilience">
               {services.map(({ service, uptime_percent, is_up }) => (
                 <div key={service} style={{ marginBottom: 18 }}>
@@ -278,7 +270,6 @@ export default function App() {
               ))}
             </Panel>
 
-            {/* Decision Engine */}
             <Panel title="Decision Engine" badge="Multi-objective">
               {decision && (
                 <>
