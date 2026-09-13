@@ -26,11 +26,14 @@ from backend.digital_twin.drift import DriftDetector
 from backend.digital_twin.twin import DigitalTwin
 from backend.health.engine import HealthEngine
 from backend.network.cascade_predictor import CascadePredictor
+from backend.network.config_versioning import ConfigVersionStore
 from backend.network.critical_path import CriticalPathProtector
 from backend.network.dependency_analyzer import DependencyAnalyzer
+from backend.network.fidelity_calibration import FidelityCalibrator
 from backend.network.min_change_recovery import select_minimum_change
 from backend.network.service_graph import ServiceDependencyGraph
 from backend.network.simulator import NetworkSimulator
+from backend.network.time_machine import NetworkTimeMachine
 from backend.network.topology_morpher import TopologyMorpher
 from backend.network.topology_recommender import TopologyRecommendationEngine
 
@@ -50,6 +53,12 @@ _drift_detector = DriftDetector()
 _topology_recommender = TopologyRecommendationEngine()
 _topology_morpher = TopologyMorpher(_simulator)
 _latest_candidates: list = []  # cached so /approve can reference by index
+_config_store = ConfigVersionStore()
+_time_machine = NetworkTimeMachine(max_snapshots=2000)
+_fidelity_calibrator = FidelityCalibrator()
+_config_store.record(
+    _simulator.get_topology().to_dict(), "initial deployment", "startup", author="system:init"
+)
 
 
 def _sync_and_score() -> dict:
@@ -58,7 +67,9 @@ def _sync_and_score() -> dict:
     scores = _health_engine.score_snapshot(snapshot.nodes)
     for node_id, score in scores.items():
         _twin.attach_health_score(node_id, score)
-    return _twin.get_state()
+    state = _twin.get_state()
+    _time_machine.record(state)
+    return state
 
 
 @router.get("/status")
@@ -180,6 +191,12 @@ def apply_morph():
     if picked is None:
         return {"error": "No policy-approved candidate available. Approve one first via /approve."}
     episode = _topology_morpher.apply(picked)
+    _config_store.record(
+        _simulator.get_topology().to_dict(),
+        change_description=episode.candidate.description,
+        reason=f"topology morph: {episode.candidate.change_type.value}",
+        author="system:topology_morpher",
+    )
     return {
         "morph_state": _topology_morpher.state.value,
         "change_type": episode.candidate.change_type.value,
@@ -194,6 +211,12 @@ def revert_morph():
         _topology_morpher.revert()
     except RuntimeError as e:
         return {"error": str(e)}
+    _config_store.record(
+        _simulator.get_topology().to_dict(),
+        change_description="reverted temporary morph links",
+        reason="recovery complete, returning to Star",
+        author="system:topology_morpher",
+    )
     return {"morph_state": _topology_morpher.state.value}
 
 
@@ -206,4 +229,65 @@ def morph_status():
             "change_type": episode.candidate.change_type.value,
             "links_added": episode.added_link_ids,
         },
+    }
+
+
+@router.get("/config-history")
+def config_history():
+    """Feature 6.47: every recorded configuration version - initial deployment plus every morph apply/revert."""
+    return {
+        "versions": [
+            {k: v for k, v in entry.__dict__.items()}
+            for entry in _config_store.get_history()
+        ]
+    }
+
+
+@router.get("/config-history/diff")
+def config_diff(version_a: int, version_b: int):
+    return _config_store.diff(version_a, version_b)
+
+
+@router.get("/time-machine/latest")
+def time_machine_latest():
+    """Feature 6.39: most recent recorded snapshot."""
+    snap = _time_machine.get_latest()
+    if snap is None:
+        return {"error": "No snapshots recorded yet."}
+    return {"timestamp": snap.timestamp, "tick": snap.tick, "state": snap.state}
+
+
+@router.get("/time-machine/node/{node_id}")
+def time_machine_node_history(node_id: str, limit: int = 100):
+    """Feature 6.39: one node's status/health/latency/packet-loss over time."""
+    return {"node_id": node_id, "history": _time_machine.node_history(node_id, limit=limit)}
+
+
+@router.get("/fidelity/report")
+def fidelity_report():
+    """Feature 6.62: aggregate prediction-vs-observed error across all completed sandbox scenarios."""
+    return _fidelity_calibrator.overall_report()
+
+
+@router.post("/fidelity/predict/{scenario_label}")
+def fidelity_predict(scenario_label: str, node_id: str):
+    """Runs a fail-node scenario in the sandbox and records it as a prediction for later comparison."""
+    from backend.digital_twin.sandbox import WhatIfSandbox
+    sandbox = WhatIfSandbox(_twin)
+    result = sandbox.run_scenario(scenario_label, lambda sim: sim.fail_node(node_id), ticks=3)
+    _fidelity_calibrator.record_prediction(scenario_label, result.final_state)
+    return {"recorded_prediction_for": scenario_label, "nodes_down_predicted": result.nodes_down}
+
+
+@router.post("/fidelity/observe/{scenario_label}")
+def fidelity_observe(scenario_label: str):
+    """Call after the SAME change has actually happened on the real network, to compare against the earlier prediction."""
+    state = _sync_and_score()
+    record = _fidelity_calibrator.record_observed(scenario_label, state)
+    if record is None:
+        return {"error": f"No prediction was recorded for '{scenario_label}'. Call /fidelity/predict first."}
+    return {
+        "scenario_label": scenario_label,
+        "error_by_metric": record.error_by_metric,
+        "service_impact_match": record.service_impact_match,
     }
