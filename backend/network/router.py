@@ -28,8 +28,11 @@ from backend.health.engine import HealthEngine
 from backend.network.cascade_predictor import CascadePredictor
 from backend.network.critical_path import CriticalPathProtector
 from backend.network.dependency_analyzer import DependencyAnalyzer
+from backend.network.min_change_recovery import select_minimum_change
 from backend.network.service_graph import ServiceDependencyGraph
 from backend.network.simulator import NetworkSimulator
+from backend.network.topology_morpher import TopologyMorpher
+from backend.network.topology_recommender import TopologyRecommendationEngine
 
 router = APIRouter(prefix="/api/network", tags=["network"])
 
@@ -44,6 +47,9 @@ _service_graph = ServiceDependencyGraph()
 _critical_path_protector = CriticalPathProtector()
 _dependency_analyzer = DependencyAnalyzer(_twin)
 _drift_detector = DriftDetector()
+_topology_recommender = TopologyRecommendationEngine()
+_topology_morpher = TopologyMorpher(_simulator)
+_latest_candidates: list = []  # cached so /approve can reference by index
 
 
 def _sync_and_score() -> dict:
@@ -139,3 +145,65 @@ def drift():
     forked.sync()
     report = _drift_detector.compare(_twin.get_state(), forked.get_state())
     return report.__dict__
+
+
+@router.get("/topology-recommendations")
+def topology_recommendations():
+    """Feature 6.61: candidate topology changes for currently-unprotected critical nodes,
+    sorted cheapest first. None are policy-approved yet - see the /approve endpoint."""
+    global _latest_candidates
+    state = _sync_and_score()
+    _latest_candidates = _topology_recommender.generate_candidates(state)
+    return {
+        "candidates": [
+            {"index": i, **{k: (v.value if hasattr(v, "value") else v) for k, v in c.__dict__.items()}}
+            for i, c in enumerate(_latest_candidates)
+        ]
+    }
+
+
+@router.post("/topology-recommendations/{index}/approve")
+def approve_candidate(index: int, passed: bool = True, notes: str = ""):
+    """Policy/Security track calls this (or a human does, during testing) to
+    mark a candidate reviewed. Nothing gets applied without this."""
+    if index < 0 or index >= len(_latest_candidates):
+        return {"error": f"No candidate at index {index}. Call GET /topology-recommendations first."}
+    candidate = _latest_candidates[index]
+    _topology_recommender.mark_policy_result(candidate, passed=passed, notes=notes)
+    return {"index": index, "policy_checked": candidate.policy_checked, "policy_notes": candidate.policy_notes}
+
+
+@router.post("/topology-morph/apply")
+def apply_morph():
+    """Feature 6.24/6.25: pick the cheapest policy-approved candidate and apply it (creates real links)."""
+    picked = select_minimum_change(_latest_candidates)
+    if picked is None:
+        return {"error": "No policy-approved candidate available. Approve one first via /approve."}
+    episode = _topology_morpher.apply(picked)
+    return {
+        "morph_state": _topology_morpher.state.value,
+        "change_type": episode.candidate.change_type.value,
+        "links_added": episode.added_link_ids,
+    }
+
+
+@router.post("/topology-morph/revert")
+def revert_morph():
+    """Removes exactly the links the active morph episode added, returns to STAR."""
+    try:
+        _topology_morpher.revert()
+    except RuntimeError as e:
+        return {"error": str(e)}
+    return {"morph_state": _topology_morpher.state.value}
+
+
+@router.get("/topology-morph/status")
+def morph_status():
+    episode = _topology_morpher.active_episode
+    return {
+        "morph_state": _topology_morpher.state.value,
+        "active_episode": None if episode is None else {
+            "change_type": episode.candidate.change_type.value,
+            "links_added": episode.added_link_ids,
+        },
+    }
