@@ -22,9 +22,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from backend.digital_twin.drift import DriftDetector
 from backend.digital_twin.twin import DigitalTwin
 from backend.health.engine import HealthEngine
 from backend.network.cascade_predictor import CascadePredictor
+from backend.network.critical_path import CriticalPathProtector
+from backend.network.dependency_analyzer import DependencyAnalyzer
 from backend.network.service_graph import ServiceDependencyGraph
 from backend.network.simulator import NetworkSimulator
 
@@ -38,6 +41,9 @@ _twin = DigitalTwin(_simulator)
 _health_engine = HealthEngine()
 _cascade_predictor = CascadePredictor()
 _service_graph = ServiceDependencyGraph()
+_critical_path_protector = CriticalPathProtector()
+_dependency_analyzer = DependencyAnalyzer(_twin)
+_drift_detector = DriftDetector()
 
 
 def _sync_and_score() -> dict:
@@ -90,3 +96,46 @@ def service_graph():
     state = _sync_and_score()
     statuses = _service_graph.compute_status(state)
     return {"services": {name: s.__dict__ for name, s in statuses.items()}}
+
+
+@router.get("/critical-paths")
+def critical_paths():
+    """Feature 6.20: paths serving critical services, and whether a redundant path exists."""
+    state = _sync_and_score()
+    paths = _critical_path_protector.get_critical_paths(state)
+    return {"results": [p.__dict__ for p in paths]}
+
+
+@router.get("/dependency-analysis/node/{node_id}")
+def dependency_analysis_node(node_id: str):
+    """Feature 6.49: downstream service/node impact if this node fails. Simulated in a sandbox fork - never touches the real network."""
+    _sync_and_score()
+    impact = _dependency_analyzer.analyze_node_failure(node_id)
+    return impact.__dict__
+
+
+@router.get("/dependency-analysis/link/{link_id}")
+def dependency_analysis_link(link_id: str):
+    """Feature 6.49: downstream impact if this link fails."""
+    _sync_and_score()
+    impact = _dependency_analyzer.analyze_link_failure(link_id)
+    return impact.__dict__
+
+
+@router.get("/dependency-analysis/service/{service_name}")
+def dependency_analysis_service(service_name: str):
+    """Feature 6.49: which other services would go down if this one did (dependency-chain walk, no simulation needed)."""
+    _sync_and_score()
+    impact = _dependency_analyzer.analyze_service_failure(service_name)
+    return impact.__dict__
+
+
+@router.get("/drift")
+def drift():
+    """Feature 6.57: compares the real twin against a forked sandbox twin one tick later.
+    See drift.py's docstring for why this isn't real-vs-twin yet - there's only one data source so far."""
+    _sync_and_score()
+    forked = _twin.fork()
+    forked.sync()
+    report = _drift_detector.compare(_twin.get_state(), forked.get_state())
+    return report.__dict__
