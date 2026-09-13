@@ -136,3 +136,11 @@ FailurePredictor = TrendFailurePredictor
 def predict_failures(predictor: TrendFailurePredictor) -> list:
     """Convenience entry point. Returns JSON-able list[dict]."""
     return [p.to_dict() for p in predictor.predict()]
+def get_failure_risk(predictor: TrendFailurePredictor, node_id: str) -> float:
+    """Single-node lookup for Akshata's HealthEngine hook:
+    engine.score_node(node_telemetry, predicted_failure_risk=get_failure_risk(predictor, node_id))
+    Returns 0.0 if the node has no prediction history yet."""
+    for p in predictor.predict():
+        if p.node_id == node_id:
+            return round(p.failure_probability, 3)
+    return 0.0
