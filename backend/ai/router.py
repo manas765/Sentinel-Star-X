@@ -1,52 +1,56 @@
 """
 backend/ai/router.py
 
-FastAPI router for the AI + Prediction track. Framework confirmed by
-Aakash: FastAPI, app defined in backend/main.py, endpoints are plain
-functions returning dicts.
+FastAPI router for the AI + Prediction track. Updated for the real schema
+(v2): detect_anomalies()/predict_failures() now need central_node_id, and
+there are two new link-level endpoints since links have independent
+telemetry now (LinkAnomalyDetector in anomaly_detection.py).
 
-Kept as its own APIRouter instead of adding routes straight into
-backend/main.py, so 16 endpoints across this track don't turn a file all
-four tracks touch into a merge-conflict hotspot. To wire it in,
-backend/main.py needs (once, not per-endpoint):
+Kept as its own APIRouter, not appended into backend/main.py -- confirmed
+with Aakash this matches the pattern he's using for his own router too.
+To wire in (already done once, only needed again if main.py's include
+line is ever lost):
 
     from backend.ai.router import router as ai_router
     app.include_router(ai_router)
 
-ASSUMPTION -- flagged, not guessed past: I haven't seen backend/main.py,
-so I don't know if per-track routers is what Aakash actually wants, or if
-he'd rather every endpoint live directly in main.py like his example.
-Confirm before merging this file (see the group reply draft).
-
 NOT EXECUTED HERE: fastapi isn't installed in this sandbox and it has no
-network access, so this file is written to standard FastAPI conventions
-but not run. Run backend/ai/test_router.py locally (where fastapi is
-already installed) to confirm before you PR it.
+network access. Standard FastAPI conventions, but run test_router.py
+locally before relying on it.
 """
 
 from fastapi import APIRouter
 
-from backend.ai.anomaly_detection import detect_anomalies
-from backend.ai.failure_classification import classify_failures
+from backend.ai.anomaly_detection import detect_anomalies, detect_link_anomalies
+from backend.ai.failure_classification import classify_failures, classify_link_failures
 from backend.ai.failure_prediction import TrendFailurePredictor, predict_failures
 from backend.ai.telemetry_sim import SyntheticTelemetryGenerator
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
 # Dev-only telemetry source until Akshata's real feed is wired up. Swap this
-# for the real feed call once it exists -- nothing downstream needs to change,
-# detect_anomalies()/predict_failures() just take whatever snapshot they're given.
+# for the real feed call once it exists -- everything downstream just takes
+# whatever TelemetrySnapshot it's given.
 _dev_generator = SyntheticTelemetryGenerator(num_leaves=8, seed=None)
+_central_id = _dev_generator.central_node_id
 
 # Predictor needs history across calls, so it's module-level, not per-request.
-_predictor = TrendFailurePredictor()
+_predictor = TrendFailurePredictor(central_node_id=_central_id)
 
 
 @router.get("/anomalies")
 def get_anomalies():
-    """Feature 1: AI Anomaly Detection. Current anomaly status per node."""
+    """Feature 1: AI Anomaly Detection, node-level."""
     snapshot = _dev_generator.generate_snapshot()
-    return {"results": detect_anomalies(snapshot)}
+    return {"results": detect_anomalies(snapshot, central_node_id=_central_id)}
+
+
+@router.get("/link-anomalies")
+def get_link_anomalies():
+    """Feature 1: AI Anomaly Detection, link-level (new in v2 -- link_down
+    / link_congestion can now be told apart from a node actually failing)."""
+    snapshot = _dev_generator.generate_snapshot()
+    return {"results": detect_link_anomalies(snapshot)}
 
 
 @router.get("/failure-predictions")
@@ -60,9 +64,15 @@ def get_failure_predictions():
 
 @router.get("/failure-classification")
 def get_failure_classification():
-    """Feature 3: Failure Classification. What kind of failure each
-    anomalous node is showing -- see failure_classification.py's interface
-    flag re: coordinating with Manas's security/failure differentiation."""
+    """Feature 3: Failure Classification, node-level."""
     snapshot = _dev_generator.generate_snapshot()
-    anomalies = detect_anomalies(snapshot)
+    anomalies = detect_anomalies(snapshot, central_node_id=_central_id)
     return {"results": classify_failures(anomalies)}
+
+
+@router.get("/link-failure-classification")
+def get_link_failure_classification():
+    """Feature 3: Failure Classification, link-level (new in v2)."""
+    snapshot = _dev_generator.generate_snapshot()
+    link_anomalies = detect_link_anomalies(snapshot)
+    return {"results": classify_link_failures(link_anomalies)}

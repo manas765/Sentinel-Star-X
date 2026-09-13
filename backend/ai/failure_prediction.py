@@ -3,14 +3,16 @@ backend/ai/failure_prediction.py
 
 Feature 2/16 (global #7): Predictive Failure Detection.
 
-Approach: mirrors Feature 1's hybrid pattern -- a lightweight trend-based
-heuristic now (extrapolates the anomaly score history Feature 1 already
-computes, tick over tick), a trained time-series model swappable in later
-behind the same interface.
+Updated for the real schema (v2): AnomalyDetector.detect() now needs a
+central_node_id, so TrendFailurePredictor takes and stores one too, passing
+it through on every update(). Everything else (the trend/slope math) is
+unchanged -- it still just tracks Feature 1's score over time, so it
+inherits whatever Feature 1 inherited from the schema, nothing new to
+guess here.
 
-Assumption: predicts off AnomalyDetector's per-tick score history, not raw
-telemetry directly -- so it inherits every assumption already flagged in
-anomaly_detection.py and telemetry_sim.py. No new schema guesses here.
+Approach: mirrors Feature 1's hybrid pattern -- a lightweight trend-based
+heuristic now, a trained time-series model swappable in later behind the
+same interface.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from dataclasses import dataclass
 from typing import Deque, Optional
 
 from backend.ai.anomaly_detection import AnomalyDetector, BaseAnomalyDetector
+from backend.telemetry.schema import TelemetrySnapshot
 
 
 @dataclass
@@ -37,7 +40,7 @@ class PredictionResult:
 
 class BaseFailurePredictor(ABC):
     @abstractmethod
-    def update(self, snapshot: list) -> None:
+    def update(self, snapshot: TelemetrySnapshot) -> None:
         raise NotImplementedError
 
     @abstractmethod
@@ -48,10 +51,11 @@ class BaseFailurePredictor(ABC):
 class TrendFailurePredictor(BaseFailurePredictor):
     """
     Keeps a rolling window of each node's anomaly score (from Feature 1) and
-    extrapolates the trend with a simple linear fit. If a node's score is
-    climbing, projects forward to estimate how many ticks until it crosses
-    the failure threshold.
+    extrapolates the trend with a simple linear fit.
 
+    central_node_id: passed straight through to the anomaly detector on
+    every update() call, since telemetry itself doesn't say which node is
+    central anymore -- see anomaly_detection.py.
     window_size: how many recent ticks to look at.
     failure_threshold: score at/above which a node is considered failed.
     """
@@ -59,18 +63,20 @@ class TrendFailurePredictor(BaseFailurePredictor):
     def __init__(
         self,
         anomaly_detector: Optional[BaseAnomalyDetector] = None,
+        central_node_id: Optional[str] = None,
         window_size: int = 10,
         failure_threshold: float = 0.85,
     ):
         self.detector = anomaly_detector or AnomalyDetector()
+        self.central_node_id = central_node_id
         self.window_size = window_size
         self.failure_threshold = failure_threshold
         self._history: dict = {}  # node_id -> deque[float]
 
-    def update(self, snapshot: list) -> None:
-        """Feed one tick's telemetry snapshot in. Call this once per tick
-        as new data arrives, before calling predict()."""
-        results = self.detector.detect(snapshot)
+    def update(self, snapshot: TelemetrySnapshot) -> None:
+        """Feed one tick's telemetry snapshot in. Call this once per tick,
+        before calling predict()."""
+        results = self.detector.detect(snapshot, central_node_id=self.central_node_id)
         for r in results:
             hist = self._history.setdefault(r.node_id, deque(maxlen=self.window_size))
             hist.append(r.score)
@@ -127,12 +133,19 @@ class TrendFailurePredictor(BaseFailurePredictor):
         return num / den if den else 0.0
 
 
-# Active predictor implementation. Swap this line to plug in a trained
-# time-series model later -- every caller importing FailurePredictor from
-# this module is unaffected.
 FailurePredictor = TrendFailurePredictor
 
 
 def predict_failures(predictor: TrendFailurePredictor) -> list:
     """Convenience entry point. Returns JSON-able list[dict]."""
     return [p.to_dict() for p in predictor.predict()]
+
+
+def get_failure_risk(predictor: TrendFailurePredictor, node_id: str) -> float:
+    """Single-node lookup for Akshata's HealthEngine hook:
+    engine.score_node(node_telemetry, predicted_failure_risk=get_failure_risk(predictor, node_id))
+    Returns 0.0 if the node has no prediction history yet."""
+    for p in predictor.predict():
+        if p.node_id == node_id:
+            return round(p.failure_probability, 3)
+    return 0.0

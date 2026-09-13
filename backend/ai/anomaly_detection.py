@@ -3,26 +3,21 @@ backend/ai/anomaly_detection.py
 
 Feature 1/16 (global #6): AI Anomaly Detection.
 
-Approach: hybrid, per your call.
-  v1 (this file) — threshold-based detector: fast, deterministic, explainable,
-  works from the very first snapshot with no training data required.
-  v2 (later) — a trained-model detector (e.g. isolation forest) plugs into
-  the same BaseAnomalyDetector interface below, so no caller has to change
-  when it lands.
+REWRITTEN against the real schema (v2). Key changes from v1:
+- Node checks no longer touch bandwidth/traffic thresholds for "congestion"
+  -- that concept moved to the link level (utilization_pct), which is a
+  cleaner signal than inferring congestion from a node's own throughput.
+- is_central is no longer on the telemetry object. detect() now takes a
+  central_node_id so it knows which thresholds to apply per node.
+- New node metrics (cpu_util_pct, mem_util_pct, jitter_ms, error_rate_pct)
+  are checked.
+- A second detector, LinkAnomalyDetector, checks link telemetry
+  independently -- this is what lets us tell "the node died" apart from
+  "the link to it died," which was the whole point of the schema split.
 
-Input contract
---------------
-Takes a "snapshot": a list of per-node telemetry dicts, the same shape
-produced by telemetry_sim.SyntheticTelemetryGenerator.generate_snapshot().
-That schema is still an ASSUMPTION pending Akshata confirming her real
-field names (see telemetry_sim.py) — when they land, only field-name
-lookups below need to change, not the detection logic.
-
-NOT YET WIRED: an HTTP endpoint. Definition-of-done calls for one, but the
-project docs don't say which web framework the team's using (Flask/FastAPI/
-etc. isn't specified anywhere). detect_anomalies() below returns plain
-JSON-able dicts, so wiring a route is a few lines once that's settled —
-flagging this rather than guessing a framework into the shared repo.
+Still hybrid per your call: threshold-based now, both detectors share the
+BaseAnomalyDetector-style interface so a trained model can slot in later
+without callers changing.
 """
 
 from __future__ import annotations
@@ -31,6 +26,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
+
+from backend.telemetry.schema import LinkStatus, LinkTelemetry, NodeStatus, NodeTelemetry, TelemetrySnapshot
 
 
 class Severity(str, Enum):
@@ -41,13 +38,39 @@ class Severity(str, Enum):
     CRITICAL = "critical"
 
 
+def _score_to_severity(score: float, is_anomalous: bool) -> Severity:
+    if not is_anomalous:
+        return Severity.NONE
+    if score >= 0.85:
+        return Severity.CRITICAL
+    if score >= 0.6:
+        return Severity.HIGH
+    if score >= 0.3:
+        return Severity.MEDIUM
+    return Severity.LOW
+
+
 @dataclass
 class AnomalyResult:
     node_id: str
     is_anomalous: bool
     score: float  # 0.0 (normal) - 1.0 (severe)
     severity: Severity
-    reasons: list = field(default_factory=list)  # human-readable trigger explanations
+    reasons: list = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        d = dict(self.__dict__)
+        d["severity"] = self.severity.value
+        return d
+
+
+@dataclass
+class LinkAnomalyResult:
+    link_id: str
+    is_anomalous: bool
+    score: float
+    severity: Severity
+    reasons: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
         d = dict(self.__dict__)
@@ -57,116 +80,156 @@ class AnomalyResult:
 
 class BaseAnomalyDetector(ABC):
     """Common interface so the threshold detector and a future model-based
-    detector are interchangeable to every caller (Root Cause Analysis,
-    Predictive Failure Detection, the dashboard, etc.)."""
+    detector are interchangeable to every caller."""
 
     @abstractmethod
-    def detect(self, snapshot: list) -> list:
-        """snapshot: list of node telemetry dicts. Returns list[AnomalyResult]."""
+    def detect(self, snapshot: TelemetrySnapshot, central_node_id: Optional[str] = None) -> list:
         raise NotImplementedError
 
 
 @dataclass
-class ThresholdConfig:
-    """
-    Per-node-type thresholds. Defaults set relative to the synthetic
-    generator's baseline ranges (leaf vs central have very different normal
-    operating ranges, so they need separate thresholds). Retune once real
-    telemetry -- and real baselines -- come in from Akshata.
-    """
+class NodeThresholdConfig:
+    """Retune once real telemetry (and real baselines) come in."""
     leaf_max_latency_ms: float = 60.0
-    leaf_max_packet_loss_pct: float = 5.0
-    leaf_min_bandwidth_mbps: float = 40.0
-    leaf_max_traffic_mbps: float = 80.0
-
     central_max_latency_ms: float = 15.0
-    central_max_packet_loss_pct: float = 5.0
-    central_min_bandwidth_mbps: float = 400.0
-    central_max_traffic_mbps: float = 500.0
+    max_jitter_ms: float = 5.0
+    max_packet_loss_pct: float = 5.0
+    max_error_rate_pct: float = 5.0
+    max_cpu_util_pct: float = 85.0
+    max_mem_util_pct: float = 85.0
 
 
 class ThresholdAnomalyDetector(BaseAnomalyDetector):
-    """v1: static, per-field thresholds. No training/history required --
-    which is what makes it the right 'now' half of the hybrid, while a
-    model-based detector (v2) is still future work."""
+    """v1: static per-field thresholds on node telemetry."""
 
-    def __init__(self, config: Optional[ThresholdConfig] = None):
-        self.config = config or ThresholdConfig()
+    def __init__(self, config: Optional[NodeThresholdConfig] = None):
+        self.config = config or NodeThresholdConfig()
 
-    def detect(self, snapshot: list) -> list:
-        return [self._check_node(node) for node in snapshot]
+    def detect(self, snapshot: TelemetrySnapshot, central_node_id: Optional[str] = None) -> list:
+        return [
+            self._check_node(n, is_central=(n.node_id == central_node_id))
+            for n in snapshot.nodes
+        ]
 
-    def _check_node(self, node: dict) -> AnomalyResult:
+    def _check_node(self, node: NodeTelemetry, is_central: bool) -> AnomalyResult:
         cfg = self.config
-        is_central = node.get("is_central", False)
         reasons = []
         metric_scores = []
 
-        status = node.get("status")
-        if status == "down":
+        if node.status == NodeStatus.DOWN:
             reasons.append("status=down")
             metric_scores.append(1.0)
-        elif status == "degraded":
+        elif node.status == NodeStatus.DEGRADED:
             reasons.append("status=degraded")
             metric_scores.append(0.5)
 
         max_latency = cfg.central_max_latency_ms if is_central else cfg.leaf_max_latency_ms
-        latency = node.get("latency_ms", 0.0)
-        if latency > max_latency:
-            reasons.append(f"latency_ms={latency} > {max_latency}")
-            metric_scores.append(min(latency / max_latency / 3, 1.0))
+        if node.latency_ms > max_latency:
+            reasons.append(f"latency_ms={node.latency_ms} > {max_latency}")
+            metric_scores.append(min(node.latency_ms / max_latency / 3, 1.0))
 
-        max_loss = cfg.central_max_packet_loss_pct if is_central else cfg.leaf_max_packet_loss_pct
-        loss = node.get("packet_loss_pct", 0.0)
-        if loss > max_loss:
-            reasons.append(f"packet_loss_pct={loss} > {max_loss}")
-            metric_scores.append(min(loss / max_loss / 3, 1.0))
+        if node.jitter_ms > cfg.max_jitter_ms:
+            reasons.append(f"jitter_ms={node.jitter_ms} > {cfg.max_jitter_ms}")
+            metric_scores.append(min(node.jitter_ms / cfg.max_jitter_ms / 3, 1.0))
 
-        min_bw = cfg.central_min_bandwidth_mbps if is_central else cfg.leaf_min_bandwidth_mbps
-        bw = node.get("bandwidth_mbps", min_bw)
-        if bw < min_bw:
-            reasons.append(f"bandwidth_mbps={bw} < {min_bw}")
-            metric_scores.append(min((min_bw - bw) / min_bw, 1.0))
+        if node.packet_loss_pct > cfg.max_packet_loss_pct:
+            reasons.append(f"packet_loss_pct={node.packet_loss_pct} > {cfg.max_packet_loss_pct}")
+            metric_scores.append(min(node.packet_loss_pct / cfg.max_packet_loss_pct / 3, 1.0))
 
-        max_traffic = cfg.central_max_traffic_mbps if is_central else cfg.leaf_max_traffic_mbps
-        traffic = max(node.get("traffic_in_mbps", 0.0), node.get("traffic_out_mbps", 0.0))
-        if traffic > max_traffic:
-            reasons.append(f"traffic_mbps={traffic} > {max_traffic}")
-            metric_scores.append(min(traffic / max_traffic / 3, 1.0))
+        if node.error_rate_pct > cfg.max_error_rate_pct:
+            reasons.append(f"error_rate_pct={node.error_rate_pct} > {cfg.max_error_rate_pct}")
+            metric_scores.append(min(node.error_rate_pct / cfg.max_error_rate_pct / 3, 1.0))
+
+        if node.cpu_util_pct > cfg.max_cpu_util_pct:
+            reasons.append(f"cpu_util_pct={node.cpu_util_pct} > {cfg.max_cpu_util_pct}")
+            metric_scores.append(min(node.cpu_util_pct / cfg.max_cpu_util_pct / 3, 1.0))
+
+        if node.mem_util_pct > cfg.max_mem_util_pct:
+            reasons.append(f"mem_util_pct={node.mem_util_pct} > {cfg.max_mem_util_pct}")
+            metric_scores.append(min(node.mem_util_pct / cfg.max_mem_util_pct / 3, 1.0))
 
         score = max(metric_scores) if metric_scores else 0.0
         is_anomalous = bool(metric_scores)
-        severity = self._score_to_severity(score, is_anomalous)
-
         return AnomalyResult(
-            node_id=node["node_id"],
+            node_id=node.node_id,
             is_anomalous=is_anomalous,
             score=round(score, 3),
-            severity=severity,
+            severity=_score_to_severity(score, is_anomalous),
             reasons=reasons,
         )
 
-    @staticmethod
-    def _score_to_severity(score: float, is_anomalous: bool) -> Severity:
-        if not is_anomalous:
-            return Severity.NONE
-        if score >= 0.85:
-            return Severity.CRITICAL
-        if score >= 0.6:
-            return Severity.HIGH
-        if score >= 0.3:
-            return Severity.MEDIUM
-        return Severity.LOW
+
+@dataclass
+class LinkThresholdConfig:
+    max_utilization_pct: float = 85.0
+    max_latency_ms: float = 20.0
+    max_packet_loss_pct: float = 5.0
 
 
-# Active detector implementation. Swap this line to plug in a model-based
-# detector later (e.g. AnomalyDetector = IsolationForestAnomalyDetector) --
-# every caller importing AnomalyDetector from this module is unaffected.
+class LinkAnomalyDetector:
+    """NEW in v2 -- checks link telemetry independently of node telemetry,
+    so a link can be flagged as failing/congested even if both nodes on
+    either end of it report perfectly healthy telemetry."""
+
+    def __init__(self, config: Optional[LinkThresholdConfig] = None):
+        self.config = config or LinkThresholdConfig()
+
+    def detect(self, snapshot: TelemetrySnapshot) -> list:
+        return [self._check_link(l) for l in snapshot.links]
+
+    def _check_link(self, link: LinkTelemetry) -> LinkAnomalyResult:
+        cfg = self.config
+        reasons = []
+        metric_scores = []
+
+        if link.status == LinkStatus.DOWN:
+            reasons.append("status=down")
+            metric_scores.append(1.0)
+        elif link.status == LinkStatus.DEGRADED:
+            reasons.append("status=degraded")
+            metric_scores.append(0.5)
+
+        if link.utilization_pct > cfg.max_utilization_pct:
+            reasons.append(f"utilization_pct={link.utilization_pct} > {cfg.max_utilization_pct}")
+            metric_scores.append(min(link.utilization_pct / cfg.max_utilization_pct / 1.5, 1.0))
+
+        if link.latency_ms > cfg.max_latency_ms:
+            reasons.append(f"latency_ms={link.latency_ms} > {cfg.max_latency_ms}")
+            metric_scores.append(min(link.latency_ms / cfg.max_latency_ms / 3, 1.0))
+
+        if link.packet_loss_pct > cfg.max_packet_loss_pct:
+            reasons.append(f"packet_loss_pct={link.packet_loss_pct} > {cfg.max_packet_loss_pct}")
+            metric_scores.append(min(link.packet_loss_pct / cfg.max_packet_loss_pct / 3, 1.0))
+
+        score = max(metric_scores) if metric_scores else 0.0
+        is_anomalous = bool(metric_scores)
+        return LinkAnomalyResult(
+            link_id=link.link_id,
+            is_anomalous=is_anomalous,
+            score=round(score, 3),
+            severity=_score_to_severity(score, is_anomalous),
+            reasons=reasons,
+        )
+
+
+# Active implementations. Swap these lines to plug in model-based detectors
+# later -- callers importing these names are unaffected.
 AnomalyDetector = ThresholdAnomalyDetector
 
 
-def detect_anomalies(snapshot: list, detector: Optional[BaseAnomalyDetector] = None) -> list:
-    """Convenience entry point. Returns JSON-able list[dict] -- wrap this
-    directly in whichever web framework the team settles on."""
+def detect_anomalies(
+    snapshot: TelemetrySnapshot,
+    central_node_id: Optional[str] = None,
+    detector: Optional[BaseAnomalyDetector] = None,
+) -> list:
+    """Node-level anomalies. Returns JSON-able list[dict]."""
     detector = detector or AnomalyDetector()
+    return [r.to_dict() for r in detector.detect(snapshot, central_node_id=central_node_id)]
+
+
+def detect_link_anomalies(
+    snapshot: TelemetrySnapshot, detector: Optional[LinkAnomalyDetector] = None
+) -> list:
+    """Link-level anomalies. Returns JSON-able list[dict]."""
+    detector = detector or LinkAnomalyDetector()
     return [r.to_dict() for r in detector.detect(snapshot)]

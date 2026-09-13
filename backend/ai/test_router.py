@@ -2,8 +2,7 @@
 backend/ai/test_router.py
 
 NOT EXECUTED IN THE SANDBOX THAT GENERATED THIS -- fastapi isn't installed
-there and it has no network access. Run it in your own venv, where fastapi
-is already a dependency since Aakash's using it elsewhere:
+there and it has no network access. Run it in your own venv:
 
     pytest backend/ai/test_router.py -v
 """
@@ -20,24 +19,41 @@ def _client():
     return TestClient(app)
 
 
-def test_anomalies_endpoint_returns_results_list():
-    client = _client()
-    response = client.get("/api/ai/anomalies")
+def test_anomalies_endpoint():
+    response = _client().get("/api/ai/anomalies")
     assert response.status_code == 200
-    body = response.json()
-    assert "results" in body
-    assert isinstance(body["results"], list)
-    assert len(body["results"]) > 0
-    assert "node_id" in body["results"][0]
-    assert "is_anomalous" in body["results"][0]
+    body = response.json()["results"]
+    assert isinstance(body, list) and len(body) > 0
+    assert "node_id" in body[0] and "is_anomalous" in body[0]
 
 
-def test_failure_predictions_endpoint_returns_results_list():
-    client = _client()
-    response = client.get("/api/ai/failure-predictions")
+def test_link_anomalies_endpoint():
+    response = _client().get("/api/ai/link-anomalies")
     assert response.status_code == 200
-    body = response.json()
-    assert "results" in body
-    assert isinstance(body["results"], list)
-    assert len(body["results"]) > 0
-    assert "failure_probability" in body["results"][0]
+    body = response.json()["results"]
+    assert isinstance(body, list) and len(body) > 0
+    assert "link_id" in body[0] and "is_anomalous" in body[0]
+
+
+def test_failure_predictions_endpoint():
+    response = _client().get("/api/ai/failure-predictions")
+    assert response.status_code == 200
+    body = response.json()["results"]
+    assert isinstance(body, list) and len(body) > 0
+    assert "failure_probability" in body[0]
+
+
+def test_failure_classification_endpoint():
+    response = _client().get("/api/ai/failure-classification")
+    assert response.status_code == 200
+    body = response.json()["results"]
+    assert isinstance(body, list) and len(body) > 0
+    assert "category" in body[0]
+
+
+def test_link_failure_classification_endpoint():
+    response = _client().get("/api/ai/link-failure-classification")
+    assert response.status_code == 200
+    body = response.json()["results"]
+    assert isinstance(body, list) and len(body) > 0
+    assert "category" in body[0]
