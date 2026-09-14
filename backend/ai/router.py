@@ -23,6 +23,8 @@ from backend.ai.root_cause_analysis import analyze_root_causes
 from backend.ai.benchmarking_engine import run_benchmark
 
 from backend.ai.resilience_index import calculate_resilience_index
+
+from backend.ai.graph_generation import generate_graph
 """
 from fastapi import APIRouter
 
@@ -106,3 +108,12 @@ def get_resilience_index():
     return calculate_resilience_index(
         node_anomalies, link_anomalies, predictions, _dev_generator.topology, _central_id
     )
+
+@router.get("/graph")
+def get_graph():
+    """Feature 6 (global #35): Automatic Graph Generation. Ready-to-render
+    node/edge structure with radial layout + severity color coding."""
+    snapshot = _dev_generator.generate_snapshot()
+    node_anomalies = detect_anomalies(snapshot, central_node_id=_central_id)
+    link_anomalies = detect_link_anomalies(snapshot)
+    return generate_graph(_dev_generator.topology, node_anomalies, link_anomalies, _central_id)
