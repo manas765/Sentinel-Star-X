@@ -19,6 +19,8 @@ network access. Standard FastAPI conventions, but run test_router.py
 locally before relying on it.
 
 from backend.ai.root_cause_analysis import analyze_root_causes
+
+from backend.ai.benchmarking_engine import run_benchmark
 """
 from fastapi import APIRouter
 
@@ -81,3 +83,11 @@ def get_root_cause_analysis():
     link_anomalies = detect_link_anomalies(snapshot)
     results = analyze_root_causes(node_anomalies, link_anomalies, _dev_generator.topology, _central_id)
     return {"results": results}
+
+@router.get("/benchmark")
+def get_benchmark():
+    """Feature 5: Benchmarking Engine. Scores Features 1/3/4 against
+    synthetic scenarios with known ground truth. Slower than the other
+    endpoints (runs ~35 scenarios per call) -- fine for occasional use,
+    not meant to be polled."""
+    return run_benchmark()
