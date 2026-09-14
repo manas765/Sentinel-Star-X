@@ -6,25 +6,25 @@ from .knowledge_base import RecoveryKnowledgeBase
 from .cost_estimator import RecoveryCostEstimator, CostFactors
 from .strategy_simulator import RecoveryStrategySimulator, SimulationResult
 from .context_aware_recovery import RecoveryContext, RecoveryDecision, ContextAwareRecovery
+from security.recovery_integration import enforce_security_gate
 import uuid
 from datetime import datetime, timezone
 
 
 class ObjectiveWeights(BaseModel):
     """How much each objective matters — must sum to 1.0."""
-    speed: float = 0.30         # minimise recovery time
-    reliability: float = 0.40  # maximise success probability
-    cost: float = 0.20          # minimise total cost score
-    safety: float = 0.10        # prefer strategies with rollback
+    speed: float = 0.30
+    reliability: float = 0.40
+    cost: float = 0.20
+    safety: float = 0.10
 
 
 class EngineDecision(BaseModel):
-    """Final decision output from the Decision Engine."""
     decision_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     failed_node: str
     chosen_strategy: str
-    composite_score: float          # higher = better (0–100)
+    composite_score: float
     simulation: SimulationResult
     weights_used: ObjectiveWeights
     runner_up: Optional[str] = None
@@ -38,9 +38,6 @@ class MultiObjectiveDecisionEngine:
     Scores every candidate strategy across multiple objectives
     (speed, reliability, cost, safety) and picks the one with
     the highest weighted composite score.
-
-    This is the single entry point the Autonomous Self-Healing
-    module (#27) and Human-in-the-Loop (#45) call.
     """
 
     def __init__(
@@ -53,24 +50,12 @@ class MultiObjectiveDecisionEngine:
         self._simulator = RecoveryStrategySimulator(memory)
         self._kb = RecoveryKnowledgeBase(memory)
 
-    def _score(
-        self,
-        sim: SimulationResult,
-        weights: ObjectiveWeights,
-    ) -> float:
-        """Compute weighted composite score (0–100, higher = better)."""
-        # Speed: invert duration (cap at 60s for normalisation)
+    def _score(self, sim: SimulationResult, weights: ObjectiveWeights) -> float:
         max_duration = 60.0
-        speed_score = max(0.0, 1.0 - sim.projected_duration_seconds / max_duration) * 100
-
-        # Reliability: success probability directly
+        speed_score       = max(0.0, 1.0 - sim.projected_duration_seconds / max_duration) * 100
         reliability_score = sim.projected_success_probability * 100
-
-        # Cost: invert recommendation_score (lower cost = higher score)
-        cost_score = max(0.0, 100.0 - sim.decision.estimated_cost.recommendation_score)
-
-        # Safety: rollback available = 100, not available = 0
-        safety_score = 100.0 if sim.decision.estimated_cost.rollback_bonus > 0 else 0.0
+        cost_score        = max(0.0, 100.0 - sim.decision.estimated_cost.recommendation_score)
+        safety_score      = 100.0 if sim.decision.estimated_cost.rollback_bonus > 0 else 0.0
 
         composite = (
             speed_score       * weights.speed +
@@ -86,16 +71,18 @@ class MultiObjectiveDecisionEngine:
         context: RecoveryContext,
         weights: Optional[ObjectiveWeights] = None,
     ) -> EngineDecision:
+        # Security gate check — must pass before any recovery is attempted
+        gate_decision = enforce_security_gate(node_id)
+        if not gate_decision.allowed:
+            raise PermissionError(
+                f"Recovery blocked for {node_id}: {gate_decision.reason} "
+                f"(action: {gate_decision.recommended_action})"
+            )
+
         w = weights or self._weights
 
-        # Simulate all strategies
         simulations = self._simulator.simulate_all_strategies(node_id, context)
-
-        # Score each one
-        scored = [
-            (sim, self._score(sim, w))
-            for sim in simulations
-        ]
+        scored = [(sim, self._score(sim, w)) for sim in simulations]
         scored.sort(key=lambda x: x[1], reverse=True)
 
         best_sim, best_score = scored[0]
@@ -124,9 +111,7 @@ class MultiObjectiveDecisionEngine:
         context: RecoveryContext,
         weights: Optional[ObjectiveWeights] = None,
     ) -> List[EngineDecision]:
-        """Make decisions for every failed node in the context."""
         return [self.decide(node, context, weights) for node in context.failed_nodes]
 
     def update_weights(self, weights: ObjectiveWeights) -> None:
-        """Let Human-in-the-Loop (#45) adjust priorities at runtime."""
         self._weights = weights
