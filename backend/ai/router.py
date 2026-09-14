@@ -21,6 +21,8 @@ locally before relying on it.
 from backend.ai.root_cause_analysis import analyze_root_causes
 
 from backend.ai.benchmarking_engine import run_benchmark
+
+from backend.ai.resilience_index import calculate_resilience_index
 """
 from fastapi import APIRouter
 
@@ -91,3 +93,16 @@ def get_benchmark():
     endpoints (runs ~35 scenarios per call) -- fine for occasional use,
     not meant to be polled."""
     return run_benchmark()
+
+@router.get("/resilience-index")
+def get_resilience_index():
+    """Feature 6: SENTINEL Resilience Index. Composite 0-100 score from
+    node/link health, predicted failure risk, and cascading-failure penalty."""
+    snapshot = _dev_generator.generate_snapshot()
+    node_anomalies = detect_anomalies(snapshot, central_node_id=_central_id)
+    link_anomalies = detect_link_anomalies(snapshot)
+    _predictor.update(snapshot)
+    predictions = predict_failures(_predictor)
+    return calculate_resilience_index(
+        node_anomalies, link_anomalies, predictions, _dev_generator.topology, _central_id
+    )
