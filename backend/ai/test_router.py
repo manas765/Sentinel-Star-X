@@ -1,10 +1,7 @@
 """
 backend/ai/test_router.py
 
-NOT EXECUTED IN THE SANDBOX THAT GENERATED THIS -- fastapi isn't installed
-there and it has no network access. Run it in your own venv:
-
-    pytest backend/ai/test_router.py -v
+Run with: pytest backend/ai/test_router.py -v
 """
 
 from fastapi import FastAPI
@@ -57,3 +54,12 @@ def test_link_failure_classification_endpoint():
     body = response.json()["results"]
     assert isinstance(body, list) and len(body) > 0
     assert "category" in body[0]
+
+
+def test_root_cause_analysis_endpoint():
+    response = _client().get("/api/ai/root-cause-analysis")
+    assert response.status_code == 200
+    body = response.json()["results"]
+    assert isinstance(body, list)
+    if body:
+        assert "root_cause_id" in body[0]

@@ -17,24 +17,21 @@ line is ever lost):
 NOT EXECUTED HERE: fastapi isn't installed in this sandbox and it has no
 network access. Standard FastAPI conventions, but run test_router.py
 locally before relying on it.
-"""
 
+from backend.ai.root_cause_analysis import analyze_root_causes
+"""
 from fastapi import APIRouter
 
 from backend.ai.anomaly_detection import detect_anomalies, detect_link_anomalies
 from backend.ai.failure_classification import classify_failures, classify_link_failures
 from backend.ai.failure_prediction import TrendFailurePredictor, predict_failures
+from backend.ai.root_cause_analysis import analyze_root_causes
 from backend.ai.telemetry_sim import SyntheticTelemetryGenerator
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
-# Dev-only telemetry source until Akshata's real feed is wired up. Swap this
-# for the real feed call once it exists -- everything downstream just takes
-# whatever TelemetrySnapshot it's given.
 _dev_generator = SyntheticTelemetryGenerator(num_leaves=8, seed=None)
 _central_id = _dev_generator.central_node_id
-
-# Predictor needs history across calls, so it's module-level, not per-request.
 _predictor = TrendFailurePredictor(central_node_id=_central_id)
 
 
@@ -47,16 +44,14 @@ def get_anomalies():
 
 @router.get("/link-anomalies")
 def get_link_anomalies():
-    """Feature 1: AI Anomaly Detection, link-level (new in v2 -- link_down
-    / link_congestion can now be told apart from a node actually failing)."""
+    """Feature 1: AI Anomaly Detection, link-level."""
     snapshot = _dev_generator.generate_snapshot()
     return {"results": detect_link_anomalies(snapshot)}
 
 
 @router.get("/failure-predictions")
 def get_failure_predictions():
-    """Feature 2: Predictive Failure Detection. Trend-based failure
-    probability per node, built from accumulated snapshot history."""
+    """Feature 2: Predictive Failure Detection."""
     snapshot = _dev_generator.generate_snapshot()
     _predictor.update(snapshot)
     return {"results": predict_failures(_predictor)}
@@ -72,7 +67,17 @@ def get_failure_classification():
 
 @router.get("/link-failure-classification")
 def get_link_failure_classification():
-    """Feature 3: Failure Classification, link-level (new in v2)."""
+    """Feature 3: Failure Classification, link-level."""
     snapshot = _dev_generator.generate_snapshot()
     link_anomalies = detect_link_anomalies(snapshot)
     return {"results": classify_link_failures(link_anomalies)}
+
+
+@router.get("/root-cause-analysis")
+def get_root_cause_analysis():
+    """Feature 4: Root Cause Analysis."""
+    snapshot = _dev_generator.generate_snapshot()
+    node_anomalies = detect_anomalies(snapshot, central_node_id=_central_id)
+    link_anomalies = detect_link_anomalies(snapshot)
+    results = analyze_root_causes(node_anomalies, link_anomalies, _dev_generator.topology, _central_id)
+    return {"results": results}
