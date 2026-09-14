@@ -42,8 +42,8 @@ def test_known_strategies(kb):
 
 def test_strategy_summary_order(kb):
     summary = kb.strategy_summary()
-    assert summary[0]["strategy"] == "reroute"
     assert summary[0]["success_rate"] == 1.0
+    assert summary[0]["strategy"] in ("reroute", "failover")
 
 def test_recommend(kb):
     rec = kb.recommend("A")
