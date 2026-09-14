@@ -173,7 +173,7 @@ As of the last full integration check, the combined test suite across all comple
 ## 8. Next Steps
 
 1. Akshata and Pushkar to begin/report progress on their tracks.
-2. ~~Wire `security/recovery_integration.py`'s `enforce_security_gate()` into Aakash's `decision_engine.py`, so recovery actions are checked against threat level before executing.~~ **Done** — confirmed live and passing as of the latest sync.
+2.  **Done** — `security/recovery_integration.py`'s `enforce_security_gate()` is wired into Aakash's `decision_engine.py`, so recovery actions are checked against threat level before executing. Confirmed live and passing as of the latest sync.
 3. Resolve outstanding cross-track issues (e.g. a known bug in `RecoveryKnowledgeBase.strategy_summary()`; a duplicate/misnumbered feature PR to redirect).
 4. Once Akshata's Network module and Pushkar's AI module have working outputs, connect Manas's `AttackPathAnalyzer` to the real topology graph (currently using a standalone `networkx` graph for validation).
 5. Build the end-to-end demo: Detect → Predict → Trust → Simulate → Decide → Secure → Heal → Verify → Learn.
