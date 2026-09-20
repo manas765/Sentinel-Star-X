@@ -63,3 +63,19 @@ def test_root_cause_analysis_endpoint():
     assert isinstance(body, list)
     if body:
         assert "root_cause_id" in body[0]
+
+def test_tick_and_incidents_endpoints():
+    client = _client()
+    tick_response = client.get("/api/ai/tick")
+    assert tick_response.status_code == 200
+    assert "recorded" in tick_response.json()
+
+    incidents_response = client.get("/api/ai/incidents")
+    assert incidents_response.status_code == 200
+    assert "results" in incidents_response.json()
+
+
+def test_incident_replay_endpoint_for_unknown_id():
+    response = _client().get("/api/ai/incidents/9999/replay")
+    assert response.status_code == 200
+    assert response.json()["results"] == []        

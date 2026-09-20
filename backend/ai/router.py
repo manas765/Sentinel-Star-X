@@ -17,22 +17,18 @@ line is ever lost):
 NOT EXECUTED HERE: fastapi isn't installed in this sandbox and it has no
 network access. Standard FastAPI conventions, but run test_router.py
 locally before relying on it.
-
-from backend.ai.root_cause_analysis import analyze_root_causes
-
-from backend.ai.benchmarking_engine import run_benchmark
-
-from backend.ai.resilience_index import calculate_resilience_index
-
-from backend.ai.graph_generation import generate_graph
-
-from backend.ai.explainable_ai import explain_network_state
 """
+
 from fastapi import APIRouter
 
 from backend.ai.anomaly_detection import detect_anomalies, detect_link_anomalies
+from backend.ai.benchmarking_engine import run_benchmark
 from backend.ai.failure_classification import classify_failures, classify_link_failures
 from backend.ai.failure_prediction import TrendFailurePredictor, predict_failures
+from backend.ai.explainable_ai import explain_network_state
+from backend.ai.incident_replay import IncidentReplayBuffer
+from backend.ai.graph_generation import generate_graph
+from backend.ai.resilience_index import calculate_resilience_index
 from backend.ai.root_cause_analysis import analyze_root_causes
 from backend.ai.telemetry_sim import SyntheticTelemetryGenerator
 
@@ -41,6 +37,7 @@ router = APIRouter(prefix="/api/ai", tags=["ai"])
 _dev_generator = SyntheticTelemetryGenerator(num_leaves=8, seed=None)
 _central_id = _dev_generator.central_node_id
 _predictor = TrendFailurePredictor(central_node_id=_central_id)
+_incident_buffer = IncidentReplayBuffer()
 
 
 @router.get("/anomalies")
@@ -130,3 +127,41 @@ def get_explanations():
     link_anomalies = detect_link_anomalies(snapshot)
     results = explain_network_state(node_anomalies, link_anomalies, _dev_generator.topology, _central_id)
     return {"results": results}
+
+@router.get("/tick")
+def run_and_record_tick():
+    """Feature 9 (global #38): Incident Replay -- driver endpoint. Runs one
+    full analysis pass (Features 1, 3, 4, 8) and records it into the
+    rolling incident buffer. Call this on whatever cadence you want ticks
+    recorded (e.g. a poller); /incidents and /incidents/{id}/replay read
+    from what's been recorded here."""
+    snapshot = _dev_generator.generate_snapshot()
+    node_anomalies = detect_anomalies(snapshot, central_node_id=_central_id)
+    link_anomalies = detect_link_anomalies(snapshot)
+    classifications = classify_failures(node_anomalies)
+    link_classifications = classify_link_failures(link_anomalies)
+    root_causes = analyze_root_causes(node_anomalies, link_anomalies, _dev_generator.topology, _central_id)
+    explanations = explain_network_state(node_anomalies, link_anomalies, _dev_generator.topology, _central_id)
+
+    _incident_buffer.record(
+        timestamp=snapshot.timestamp,
+        node_anomalies=node_anomalies,
+        link_anomalies=link_anomalies,
+        classifications=classifications,
+        link_classifications=link_classifications,
+        root_causes=root_causes,
+        explanations=explanations,
+    )
+    return {"recorded": True, "has_anomaly": any(r["is_anomalous"] for r in node_anomalies + link_anomalies)}
+
+
+@router.get("/incidents")
+def get_incidents():
+    """Feature 9: list every incident recorded so far (open or closed)."""
+    return {"results": _incident_buffer.list_incidents()}
+
+
+@router.get("/incidents/{incident_id}/replay")
+def get_incident_replay(incident_id: int):
+    """Feature 9: full tick-by-tick sequence for one incident."""
+    return {"results": _incident_buffer.replay(incident_id)}
