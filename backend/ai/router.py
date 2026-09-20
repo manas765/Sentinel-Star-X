@@ -31,6 +31,7 @@ from backend.ai.graph_generation import generate_graph
 from backend.ai.resilience_index import calculate_resilience_index
 from backend.ai.root_cause_analysis import analyze_root_causes
 from backend.ai.telemetry_sim import SyntheticTelemetryGenerator
+from backend.ai.network_forecast import forecast_network_weather
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -165,3 +166,19 @@ def get_incidents():
 def get_incident_replay(incident_id: int):
     """Feature 9: full tick-by-tick sequence for one incident."""
     return {"results": _incident_buffer.replay(incident_id)}
+
+@router.get("/forecast")
+def get_forecast(horizon_ticks: int = 10):
+    """Feature 10 (global #40): Network Forecast / Network Weather.
+    Projects the resilience score forward based on current per-node
+    prediction trends, plus a "weather" label and which nodes are
+    predicted to actually fail within the horizon."""
+    snapshot = _dev_generator.generate_snapshot()
+    node_anomalies = detect_anomalies(snapshot, central_node_id=_central_id)
+    link_anomalies = detect_link_anomalies(snapshot)
+    _predictor.update(snapshot)
+    predictions = predict_failures(_predictor)
+    resilience = calculate_resilience_index(
+        node_anomalies, link_anomalies, predictions, _dev_generator.topology, _central_id
+    )
+    return forecast_network_weather(predictions, resilience["score"], horizon_ticks=horizon_ticks)
