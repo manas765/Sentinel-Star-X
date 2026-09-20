@@ -25,6 +25,8 @@ from backend.ai.benchmarking_engine import run_benchmark
 from backend.ai.resilience_index import calculate_resilience_index
 
 from backend.ai.graph_generation import generate_graph
+
+from backend.ai.explainable_ai import explain_network_state
 """
 from fastapi import APIRouter
 
@@ -117,3 +119,14 @@ def get_graph():
     node_anomalies = detect_anomalies(snapshot, central_node_id=_central_id)
     link_anomalies = detect_link_anomalies(snapshot)
     return generate_graph(_dev_generator.topology, node_anomalies, link_anomalies, _central_id)
+
+@router.get("/explain")
+def get_explanations():
+    """Feature 8 (global #37): Explainable AI. Human-readable summaries
+    for every anomalous node/link, distinguishing root causes from
+    downstream symptoms."""
+    snapshot = _dev_generator.generate_snapshot()
+    node_anomalies = detect_anomalies(snapshot, central_node_id=_central_id)
+    link_anomalies = detect_link_anomalies(snapshot)
+    results = explain_network_state(node_anomalies, link_anomalies, _dev_generator.topology, _central_id)
+    return {"results": results}
