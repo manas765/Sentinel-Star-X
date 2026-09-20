@@ -32,6 +32,7 @@ from backend.ai.resilience_index import calculate_resilience_index
 from backend.ai.root_cause_analysis import analyze_root_causes
 from backend.ai.telemetry_sim import SyntheticTelemetryGenerator
 from backend.ai.network_forecast import forecast_network_weather
+from backend.ai.risk_map import generate_risk_map
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -182,3 +183,13 @@ def get_forecast(horizon_ticks: int = 10):
         node_anomalies, link_anomalies, predictions, _dev_generator.topology, _central_id
     )
     return forecast_network_weather(predictions, resilience["score"], horizon_ticks=horizon_ticks)
+
+@router.get("/risk-map")
+def get_risk_map():
+    """Feature 11 (global #41): Network Risk Map. Same layout as /graph
+    but colored by PREDICTED risk (Feature 2) instead of current severity."""
+    snapshot = _dev_generator.generate_snapshot()
+    link_anomalies = detect_link_anomalies(snapshot)
+    _predictor.update(snapshot)
+    predictions = predict_failures(_predictor)
+    return generate_risk_map(_dev_generator.topology, predictions, link_anomalies, _central_id)
