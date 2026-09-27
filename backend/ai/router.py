@@ -35,6 +35,7 @@ from backend.ai.network_forecast import forecast_network_weather
 from backend.ai.risk_map import generate_risk_map
 from backend.ai.recovery_confidence import evaluate_recovery_confidence
 from backend.ai.network_copilot import QueryIntent, ask_copilot
+from backend.ai.whatif_engine import simulate_what_if
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -223,3 +224,10 @@ def get_copilot_answer(intent: str = "status_summary", horizon_ticks: int = 10):
         QueryIntent(intent), node_anomalies, link_anomalies, predictions,
         _dev_generator.topology, _central_id, horizon_ticks=horizon_ticks
     )
+
+@router.get("/whatif")
+def get_whatif(scenario: str = "node_down", target: str = "leaf-0"):
+    """Feature 14 (global #52): Natural-Language What-If. Structured
+    scenario+target for now -- see whatif_engine.py's two scope flags
+    (LLM key, and overlap with Akshata's Sandbox/What-If Lab)."""
+    return simulate_what_if(_dev_generator, scenario, target)
