@@ -34,6 +34,7 @@ from backend.ai.telemetry_sim import SyntheticTelemetryGenerator
 from backend.ai.network_forecast import forecast_network_weather
 from backend.ai.risk_map import generate_risk_map
 from backend.ai.recovery_confidence import evaluate_recovery_confidence
+from backend.ai.network_copilot import QueryIntent, ask_copilot
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -206,3 +207,19 @@ def get_recovery_confidence():
     link_anomalies = detect_link_anomalies(snapshot)
     results = evaluate_recovery_confidence(node_anomalies, link_anomalies, _dev_generator.topology, _central_id)
     return {"results": results}
+
+@router.get("/copilot")
+def get_copilot_answer(intent: str = "status_summary", horizon_ticks: int = 10):
+    """Feature 13 (global #51): AI Network Copilot. Predefined query
+    intents (status_summary, whats_wrong, what_to_fix_first,
+    resilience_score, forecast, at_risk_soon) -- see network_copilot.py's
+    scope flag re: free-text parsing needing an LLM key that isn't set up."""
+    snapshot = _dev_generator.generate_snapshot()
+    node_anomalies = detect_anomalies(snapshot, central_node_id=_central_id)
+    link_anomalies = detect_link_anomalies(snapshot)
+    _predictor.update(snapshot)
+    predictions = predict_failures(_predictor)
+    return ask_copilot(
+        QueryIntent(intent), node_anomalies, link_anomalies, predictions,
+        _dev_generator.topology, _central_id, horizon_ticks=horizon_ticks
+    )
