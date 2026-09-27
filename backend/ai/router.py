@@ -33,6 +33,7 @@ from backend.ai.root_cause_analysis import analyze_root_causes
 from backend.ai.telemetry_sim import SyntheticTelemetryGenerator
 from backend.ai.network_forecast import forecast_network_weather
 from backend.ai.risk_map import generate_risk_map
+from backend.ai.recovery_confidence import evaluate_recovery_confidence
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -193,3 +194,15 @@ def get_risk_map():
     _predictor.update(snapshot)
     predictions = predict_failures(_predictor)
     return generate_risk_map(_dev_generator.topology, predictions, link_anomalies, _central_id)
+
+@router.get("/recovery-confidence")
+def get_recovery_confidence():
+    """Feature 12 (global #44): Recovery Confidence. Confidence in the
+    diagnosis backing a recovery decision, not confidence in a specific
+    recovery strategy -- see recovery_confidence.py's interface flag re:
+    whether Aakash's Decision Engine needs the latter instead."""
+    snapshot = _dev_generator.generate_snapshot()
+    node_anomalies = detect_anomalies(snapshot, central_node_id=_central_id)
+    link_anomalies = detect_link_anomalies(snapshot)
+    results = evaluate_recovery_confidence(node_anomalies, link_anomalies, _dev_generator.topology, _central_id)
+    return {"results": results}
