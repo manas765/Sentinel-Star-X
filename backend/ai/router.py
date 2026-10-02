@@ -37,6 +37,7 @@ from backend.ai.recovery_confidence import evaluate_recovery_confidence
 from backend.ai.network_copilot import QueryIntent, ask_copilot
 from backend.ai.whatif_engine import simulate_what_if
 from backend.ai.adaptive_thresholds import AdaptiveThresholdManager
+from backend.ai.uncertainty_aware_decisions import decide_autonomy
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -248,3 +249,14 @@ def get_adaptive_thresholds():
         "node_config": _threshold_manager.get_node_threshold_config().__dict__,
         "link_config": _threshold_manager.get_link_threshold_config().__dict__,
     }
+
+@router.get("/autonomy-decisions")
+def get_autonomy_decisions():
+    """Feature 16 (global #60): Uncertainty-Aware Autonomous Decisions.
+    How autonomously the system should act per target -- feeds Aakash's
+    Decision Engine alongside Feature 12's recovery confidence."""
+    snapshot = _dev_generator.generate_snapshot()
+    node_anomalies = detect_anomalies(snapshot, central_node_id=_central_id)
+    link_anomalies = detect_link_anomalies(snapshot)
+    results = decide_autonomy(node_anomalies, link_anomalies, _dev_generator.topology, _central_id)
+    return {"results": results}
