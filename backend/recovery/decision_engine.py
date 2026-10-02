@@ -70,6 +70,8 @@ class MultiObjectiveDecisionEngine:
         node_id: str,
         context: RecoveryContext,
         weights: Optional[ObjectiveWeights] = None,
+        ai_confidence: Optional[float] = None,
+        ai_autonomy_level: Optional[str] = None,
     ) -> EngineDecision:
         # Security gate check — must pass before any recovery is attempted
         gate_decision = enforce_security_gate(node_id)
@@ -77,6 +79,17 @@ class MultiObjectiveDecisionEngine:
             raise PermissionError(
                 f"Recovery blocked for {node_id}: {gate_decision.reason} "
                 f"(action: {gate_decision.recommended_action})"
+            )
+
+        # AI confidence gate — respect Pushkar's uncertainty-aware autonomy level
+        if ai_autonomy_level == "hold":
+            raise PermissionError(
+                f"Recovery held for {node_id}: AI confidence too low to act or propose."
+            )
+        if ai_autonomy_level == "requires_approval":
+            raise PermissionError(
+                f"Recovery for {node_id} requires human approval — "
+                f"AI diagnosis confidence insufficient for autonomous action."
             )
 
         w = weights or self._weights
