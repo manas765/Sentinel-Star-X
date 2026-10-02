@@ -36,6 +36,7 @@ from backend.ai.risk_map import generate_risk_map
 from backend.ai.recovery_confidence import evaluate_recovery_confidence
 from backend.ai.network_copilot import QueryIntent, ask_copilot
 from backend.ai.whatif_engine import simulate_what_if
+from backend.ai.adaptive_thresholds import AdaptiveThresholdManager
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -43,6 +44,7 @@ _dev_generator = SyntheticTelemetryGenerator(num_leaves=8, seed=None)
 _central_id = _dev_generator.central_node_id
 _predictor = TrendFailurePredictor(central_node_id=_central_id)
 _incident_buffer = IncidentReplayBuffer()
+_threshold_manager = AdaptiveThresholdManager()
 
 
 @router.get("/anomalies")
@@ -143,6 +145,7 @@ def run_and_record_tick():
     snapshot = _dev_generator.generate_snapshot()
     node_anomalies = detect_anomalies(snapshot, central_node_id=_central_id)
     link_anomalies = detect_link_anomalies(snapshot)
+    _threshold_manager.update(snapshot, node_anomalies, link_anomalies, _central_id)
     classifications = classify_failures(node_anomalies)
     link_classifications = classify_link_failures(link_anomalies)
     root_causes = analyze_root_causes(node_anomalies, link_anomalies, _dev_generator.topology, _central_id)
@@ -231,3 +234,17 @@ def get_whatif(scenario: str = "node_down", target: str = "leaf-0"):
     scenario+target for now -- see whatif_engine.py's two scope flags
     (LLM key, and overlap with Akshata's Sandbox/What-If Lab)."""
     return simulate_what_if(_dev_generator, scenario, target)
+
+@router.get("/adaptive-thresholds")
+def get_adaptive_thresholds():
+    """Feature 15 (global #59): Adaptive Threshold Management. Recalibrated
+    thresholds from observed /tick history. NOT automatically swapped into
+    the other endpoints yet -- they still run Feature 1's hand-tuned
+    constants. Swapping the live detector over to these once `ready` is
+    True is a deliberate decision for whoever owns that, not done silently
+    here."""
+    return {
+        "ready": _threshold_manager.ready(),
+        "node_config": _threshold_manager.get_node_threshold_config().__dict__,
+        "link_config": _threshold_manager.get_link_threshold_config().__dict__,
+    }
